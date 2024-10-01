@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 # Memuat data dari file CSV
-data = pd.read_csv("D:/Bangkit/Dicoding/submission/dasboard/all_data.csv")
+data = pd.read_csv("all_data.csv")
 
 # Judul Aplikasi
 st.title("Dashboard Data")
