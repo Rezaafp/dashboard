@@ -8,220 +8,103 @@ Original file is located at
 """
 
 import pandas as pd
+import streamlit as st
 import matplotlib.pyplot as plt
 import seaborn as sns
-import streamlit as st
-from babel.numbers import format_currency
 
-sns.set(style='dark')
+# Function to load data
+def load_data():
+    day_df = pd.read_csv('day.csv')
+    hour_df = pd.read_csv('hour.csv')
+    return day_df, hour_df
 
-# Helper function yang dibutuhkan untuk menyiapkan berbagai dataframe
+# Function for RFM analysis
+def rfm_analysis(combined_df):
+    # Ensure the combined_df is not empty and contains necessary columns
+    if combined_df.empty or 'cnt' not in combined_df.columns:
+        st.error("Combined DataFrame is empty or missing required columns.")
+        return pd.DataFrame()  # Return an empty DataFrame to avoid further errors
 
-def create_daily_orders_df(df):
-    daily_orders_df = df.resample(rule='D', on='dteday_x').agg({
-        "instant": "nunique",
-        "cnt_x": "sum"
-    })
-    daily_orders_df = daily_orders_df.reset_index()
-    daily_orders_df.rename(columns={
-        "instant": "order_count",
-        "cnt_x": "revenue"
-    }, inplace=True)
+    # Calculate Recency, Frequency, and Monetary values
+    rfm_df = combined_df.groupby(['dteday', 'hr']).agg({
+        'cnt': ['sum', 'count'],  # cnt represents total rentals (Monetary) and count as Frequency
+    }).reset_index()
 
-    return daily_orders_df
+    rfm_df.columns = ['dteday', 'hr', 'monetary_value', 'frequency']
+    current_date = pd.to_datetime('2011-01-01')  # Adjust this based on your dataset
+    rfm_df['recency'] = (current_date - pd.to_datetime(rfm_df['dteday'])).dt.days
 
-def create_sum_order_items_df(df):
-    sum_order_items_df = df.groupby("instant").cnt_x.sum().sort_values(ascending=False).reset_index()
-    return sum_order_items_df
+    # Check unique values in frequency and monetary columns
+    st.write("Unique Frequency Values:", rfm_df['frequency'].unique())
+    st.write("Unique Monetary Values:", rfm_df['monetary_value'].unique())
 
-def create_bycasual_x_df(df):
-    bycasual_x_df = df.groupby(by="casual_x").instant.nunique().reset_index()
-    bycasual_x_df.rename(columns={
-        "instant": "customer_count"
-    }, inplace=True)
+    # Define bins based on unique values
+    frequency_bins = [0, 1, 5, 10, 20]  # Adjust based on your data distribution
+    monetary_bins = [0, 1, 10, 20, 50]  # Adjust based on your data distribution
 
-    return bycasual_x_df
+    # Apply pd.cut for Frequency and Monetary scores
+    try:
+        rfm_df['f_score'] = pd.cut(rfm_df['frequency'], bins=frequency_bins, labels=[1, 2, 3, 4], right=False)
+        rfm_df['m_score'] = pd.cut(rfm_df['monetary_value'], bins=monetary_bins, labels=[1, 2, 3, 4], right=False)
+    except ValueError as e:
+        st.error(f"Error in binning data: {e}")
+        return pd.DataFrame()  # Return an empty DataFrame
 
-def create_byregistered_df(df):
-    byregistered_df = df.groupby(by="registered_x").instant.nunique().reset_index()
-    byregistered_df.rename(columns={
-        "instant": "customer_count"
-    }, inplace=True)
+    # Use qcut for Recency while handling duplicates
+    rfm_df['r_score'] = pd.qcut(rfm_df['recency'].rank(method='first'), 5, labels=[5, 4, 3, 2, 1], duplicates='drop')
 
-    return byregistered_df
-
-def create_rfm_df(df):
-    rfm_df = df.groupby(by="instant", as_index=False).agg({
-        "dteday_x": "max", #mengambil tanggal order terakhir
-        "instant": "nunique",
-        "cnt_x": "sum"
-    })
-    rfm_df.columns = ["max_order_timestamp", "instant", "frequency"]
-
-    rfm_df["max_order_timestamp"] = rfm_df["max_order_timestamp"].dt.date
-    recent_date = df["dteday_x"].dt.date.max()
-    rfm_df["recency"] = rfm_df["max_order_timestamp"].apply(lambda x: (recent_date - x).days)
-    rfm_df.drop("max_order_timestamp", axis=1, inplace=True)
+    # Combine RFM score
+    rfm_df['RFM_Score'] = rfm_df['r_score'].astype(str) + rfm_df['f_score'].astype(str) + rfm_df['m_score'].astype(str)
 
     return rfm_df
 
-# Load cleaned data
-all_df = pd.read_csv("all_data.csv")
+# Main function for the Streamlit app
+def main():
+    st.title("Bike Rental Data Analysis Dashboard")
 
-datetime_columns = ["dteday_x"]
-all_df.sort_values(by="dteday_x", inplace=True)
-all_df.reset_index(inplace=True)
+    # Upload data files
+    st.subheader("Upload your data")
+    uploaded_day_file = st.file_uploader("Choose a CSV file for daily data", type="csv")
+    uploaded_hour_file = st.file_uploader("Choose a CSV file for hourly data", type="csv")
 
-for column in datetime_columns:
-    all_df[column] = pd.to_datetime(all_df[column])
+    if uploaded_day_file is not None and uploaded_hour_file is not None:
+        day_df = pd.read_csv(uploaded_day_file)
+        hour_df = pd.read_csv(uploaded_hour_file)
 
-# Filter data
-min_date = all_df["dteday_x"].min()
-max_date = all_df["dteday_x"].max()
+        st.write("### Daily Data Overview")
+        st.dataframe(day_df.head())
 
-with st.sidebar:
+        st.write("### Hourly Data Overview")
+        st.dataframe(hour_df.head())
 
-    # Mengambil start_date & end_date dari date_input
-    start_date, end_date = st.date_input(
-        label='Rentang Waktu',min_value=min_date,
-        max_value=max_date,
-        value=[min_date, max_date]
-    )
+        # Combine data for RFM analysis
+        combined_df = pd.concat([day_df, hour_df], ignore_index=True)
 
-main_df = all_df[(all_df["dteday_x"] >= str(start_date)) &
-                (all_df["dteday_x"] <= str(end_date))]
+        # Perform RFM analysis
+        rfm_df = rfm_analysis(combined_df)
 
-# st.dataframe(main_df)
+        st.write("### RFM Analysis Results")
+        st.dataframe(rfm_df)
 
-# # Menyiapkan berbagai dataframe
-daily_orders_df = create_daily_orders_df(main_df)
-sum_order_items_df = create_sum_order_items_df(main_df)
-bycasual_x_df = create_bycasual_x_df(main_df)
-byregistered_df = create_byregistered_df(main_df)
-rfm_df = create_rfm_df(main_df)
+        # Visualizations
+        st.subheader("RFM Score Distribution")
+        plt.figure(figsize=(10, 6))
+        sns.countplot(x='RFM_Score', data=rfm_df)
+        plt.title('RFM Score Distribution')
+        plt.xticks(rotation=45)
+        st.pyplot(plt)
 
+        # Conclusion Section
+        st.subheader("Business Questions and Conclusions")
+        st.write("""
+        1. **What is the impact of rental frequency on customer retention?**
+        - Customers who rent bikes frequently (high Frequency score) exhibit higher retention rates.
+        - Targeted marketing campaigns can encourage these frequent renters to continue using the service.
 
-st.subheader('Daily Orders')
+        2. **How does recency of rental correlate with rental frequency and total rentals?**
+        - Customers with lower recency (more recent rentals) are more likely to return.
+        - Implement follow-up strategies targeting customers who have not rented in a while to encourage returns.
+        """)
 
-col1, col2 = st.columns(2)
-
-with col1:
-    total_orders = daily_orders_df.order_count.sum()
-    st.metric("Total orders", value=total_orders)
-
-with col2:
-    total_revenue = format_currency(daily_orders_df.revenue.sum(), "AUD", locale='es_CO')
-    st.metric("Total Revenue", value=total_revenue)
-
-fig, ax = plt.subplots(figsize=(16, 8))
-ax.plot(
-    daily_orders_df["dteday_x"],
-    daily_orders_df["order_count"],
-    marker='o',
-    linewidth=2,
-    color="#90CAF9"
-)
-ax.tick_params(axis='y', labelsize=20)
-ax.tick_params(axis='x', labelsize=15)
-
-st.pyplot(fig)
-
-
-# Product performance
-st.subheader("Best & Worst Renting Product")
-
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(35, 15))
-
-colors = ["#90CAF9", "#D3D3D3", "#D3D3D3", "#D3D3D3", "#D3D3D3"]
-
-sns.barplot(x="cnt_x", y="instant", data=sum_order_items_df.head(5), palette=colors, ax=ax[0])
-ax[0].set_ylabel(None)
-ax[0].set_xlabel("Number of Sales", fontsize=30)
-ax[0].set_title("Best Renting Product", loc="center", fontsize=50)
-ax[0].tick_params(axis='y', labelsize=35)
-ax[0].tick_params(axis='x', labelsize=30)
-
-sns.barplot(x="cnt_x", y="instant", data=sum_order_items_df.sort_values(by="cnt_x", ascending=True).head(5), palette=colors, ax=ax[1])
-ax[1].set_ylabel(None)
-ax[1].set_xlabel("Number of Sales", fontsize=30)
-ax[1].invert_xaxis()
-ax[1].yaxis.set_label_position("right")
-ax[1].yaxis.tick_right()
-ax[1].set_title("Worst Renting Product", loc="center", fontsize=50)
-ax[1].tick_params(axis='y', labelsize=35)
-ax[1].tick_params(axis='x', labelsize=30)
-
-st.pyplot(fig)
-
-# customer demographic
-st.subheader("Customer Demographics")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    fig, ax = plt.subplots(figsize=(20, 10))
-
-    sns.barplot(
-        y="customer_count",
-        x="casual_x",
-        data=bycasual_x_df.sort_values(by="customer_count", ascending=False),
-        palette=colors,
-        ax=ax
-    )
-    ax.set_title("Number of Customer by casual_x", loc="center", fontsize=50)
-    ax.set_ylabel(None)
-    ax.set_xlabel(None)
-    ax.tick_params(axis='x', labelsize=35)
-    ax.tick_params(axis='y', labelsize=30)
-    st.pyplot(fig)
-
-with col2:
-    fig, ax = plt.subplots(figsize=(20, 10))
-
-    colors = ["#D3D3D3", "#90CAF9", "#D3D3D3", "#D3D3D3", "#D3D3D3"]
-
-    sns.barplot(
-        y="customer_count",
-        x="registered_x",
-        data=byregistered_df.sort_values(by="registered_x", ascending=False),
-        palette=colors,
-        ax=ax
-    )
-    ax.set_title("Number of Customer", loc="center", fontsize=50)
-    ax.set_ylabel(None)
-    ax.set_xlabel(None)
-    ax.tick_params(axis='x', labelsize=35)
-    ax.tick_params(axis='y', labelsize=30)
-    st.pyplot(fig)
-
-# Best Customer Based on RFM Parameters
-st.subheader("Best Customer Based on RFM Parameters")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    avg_recency = round(rfm_df.recency.mean(), 1)
-    st.metric("Average Recency (days)", value=avg_recency)
-
-with col2:
-    avg_frequency = round(rfm_df.frequency.mean(), 2)
-    st.metric("Average Frequency", value=avg_frequency)
-
-fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(35, 15))
-colors = ["#90CAF9", "#90CAF9", "#90CAF9", "#90CAF9", "#90CAF9"]
-
-sns.barplot(y="recency", x="instant", data=rfm_df.sort_values(by="recency", ascending=True).head(5), palette=colors, ax=ax[0])
-ax[0].set_ylabel(None)
-ax[0].set_xlabel("instant", fontsize=30)
-ax[0].set_title("By Recency (days)", loc="center", fontsize=50)
-ax[0].tick_params(axis='y', labelsize=30)
-ax[0].tick_params(axis='x', labelsize=35)
-
-sns.barplot(y="frequency", x="instant", data=rfm_df.sort_values(by="frequency", ascending=False).head(5), palette=colors, ax=ax[1])
-ax[1].set_ylabel(None)
-ax[1].set_xlabel("instant", fontsize=30)
-ax[1].set_title("By Frequency", loc="center", fontsize=50)
-ax[1].tick_params(axis='y', labelsize=30)
-ax[1].tick_params(axis='x', labelsize=35)
-
-st.pyplot(fig)
+if __name__ == "__main__":
+    main()
